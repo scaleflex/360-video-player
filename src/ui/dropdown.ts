@@ -12,6 +12,10 @@ export interface DropdownOptions {
   items: DropdownItem[];
   activeId?: string | number;
   onSelect: (id: string | number) => void;
+  /** Stack items vertically instead of in a horizontal pill bar. Use for menus
+   *  with long labels (e.g. the stereo format picker) that would otherwise
+   *  overflow / overlap. */
+  vertical?: boolean;
 }
 
 export interface DropdownHandle {
@@ -42,6 +46,7 @@ const ACTIVE_CLASS = 'ci-360-video-dropdown-item--active';
  */
 export function createDropdown(opts: DropdownOptions): DropdownHandle {
   const root = createElement('div', 'ci-360-video-dropdown', { role: 'listbox' });
+  if (opts.vertical) addClass(root, 'ci-360-video-dropdown--vertical');
 
   let items = opts.items.slice();
   let activeId: string | number | undefined = opts.activeId;

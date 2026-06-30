@@ -275,9 +275,10 @@
   pointer-events: none;
 }
 
-/* Speed / quality dropdown (shared pattern, pill selector) */
+/* Speed / quality / format dropdown (shared pattern, pill selector) */
 .ci-360-video-controls-speed,
-.ci-360-video-controls-quality {
+.ci-360-video-controls-quality,
+.ci-360-video-controls-stereo {
   position: relative;
 }
 .ci-360-video-dropdown {
@@ -327,6 +328,22 @@
   color: #fff;
   font-weight: 700;
   background: rgba(255, 255, 255, 0.12);
+}
+
+/* Vertical variant — long labels (e.g. the stereo format picker) stack in a
+   column instead of a horizontal pill bar so they never overlap. */
+.ci-360-video-dropdown--vertical {
+  flex-direction: column;
+  gap: 2px;
+  right: -8px;
+  border-radius: 14px;
+  padding: 5px;
+}
+.ci-360-video-controls .ci-360-video-dropdown--vertical .ci-360-video-dropdown-item {
+  width: 100%;
+  min-width: 120px;
+  justify-content: flex-start;
+  border-radius: 9px;
 }
 
 /* Loop / repeat button (off = dimmed, on = full opacity) */

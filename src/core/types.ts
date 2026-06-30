@@ -36,6 +36,11 @@ export type StereoLayout = 'mono' | 'top-bottom' | 'side-by-side';
  *  resolves to `'mono'`. */
 export type StereoOption = StereoLayout | 'auto';
 
+/** Manual stereo-format menu visibility. `'auto'` (default) surfaces the picker
+ *  only when it's relevant — an ambiguous (square / 4:1) frame with no metadata,
+ *  or a stereo layout already active; `true` always shows it; `false` hides it. */
+export type StereoMenuOption = boolean | 'auto';
+
 /** Source-adapter selector. `'auto'` falls back to URL detection (`.m3u8` → hls, `.mpd` → dash). */
 export type PlayerType = 'auto' | 'html5' | 'hls' | 'dash';
 
@@ -102,6 +107,11 @@ export interface CI360VideoConfig {
   /** Stereo layout, or `'auto'` (default) to detect it from the MP4's Spherical
    *  Video V2 `st3d` metadata. See {@link StereoOption}. */
   stereo?: StereoOption;
+  /** Whether the toolbar shows a manual format picker (Mono / Top-Bottom /
+   *  Side-by-Side) so a viewer can correct a stereo source that carries no
+   *  metadata. Default `'auto'` — shown only when relevant. See
+   *  {@link StereoMenuOption}. */
+  stereoMenu?: StereoMenuOption;
   /** Per-lens field of view in degrees, used only by fisheye projections.
    *  Default 180 — adjust if a specific 360° camera under- or over-shoots. */
   lensFovDeg?: number;

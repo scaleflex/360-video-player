@@ -64,7 +64,7 @@ Part of the Cloudimage plugin family — sibling to [`@cloudimage/360-view`](../
 - **Multiple source adapters** (HTML5, HLS, DASH) and **multiple projections** (equirectangular, fisheye, dual-fisheye) — all pluggable, all lazy-loaded.
 - **Visual identity 1:1 with [`@cloudimage/video-hotspot`](../Video%20hotspot%20plugin)** — same CSS variables, same toolbar metrics, same Lucide icons. Themable via CSS custom properties.
 - **Full-featured toolbar**: play/pause, mute + volume, scrub progress with time tooltip, **speed selector** (0.5×–2×), **quality selector** (HLS/DASH levels), loop toggle, fullscreen, idle auto-hide, GPU-warning chip.
-- **Auto stereo detection** — `stereo: 'auto'` reads the MP4's Spherical Video metadata (`st3d` / `GSpherical`) so correctly tagged top-bottom / side-by-side files render the correct eye automatically.
+- **Auto stereo detection** — `stereo: 'auto'` reads the MP4's Spherical Video metadata (`st3d` / `GSpherical`) so correctly tagged top-bottom / side-by-side files render the correct eye automatically. Files without metadata get a developer hint plus an optional viewer-facing **format picker** (`stereoMenu`).
 - **Extension seams** for **hotspot/overlay layers** — engine slots wired up — so adding them later is targeted, not a rewrite.
 - **SSR-safe** React wrapper (dynamic import in `useEffect`) — works in Next.js / Remix without "ReferenceError: window is not defined".
 
@@ -227,6 +227,12 @@ Leave `stereo: 'auto'` (the default) and the layout is detected from the MP4's e
 
 For a stereo source the player renders the **left eye** on the sphere — so a top-bottom or side-by-side file is cropped to a single, correct image instead of showing the doubled-up frame. The view stays a normal flat (mono) 360° pan.
 
+**Sources without metadata.** Older, re-encoded clips often lose their Spherical metadata, so `'auto'` can't see they're stereo and plays them doubled-up as mono. Three things cover this:
+
+- **Explicit layout** — if your CMS/DAM knows the file is stereo, pass `stereo: 'top-bottom'` (or `'side-by-side'`) directly. Most reliable.
+- **Developer hint** — when a frame *looks* stereo (square `1:1` or `4:1`) but has no metadata, the player logs a one-time console hint telling you to set the layout or re-inject metadata. The frame shape alone is never used to auto-pick a layout — it's ambiguous (a mono-180° frame is also `1:1`).
+- **Viewer format picker** — `stereoMenu` adds a toolbar control (Mono / Top-Bottom / Side-by-Side) so a viewer can fix it at runtime. Default `'auto'` shows it only when relevant (an ambiguous frame, or a stereo layout already active); `true` always shows it, `false` hides it.
+
 ## Generating test content with ffmpeg
 
 Any equirectangular MP4 can be converted to the other formats supported here. The `v360` filter has been in ffmpeg since 4.1.
@@ -261,6 +267,7 @@ All fields are optional except `src`.
 | `sources`           | `VideoSource[]`       | —                  | Pre-encoded variants at different qualities. When set, the quality dropdown lists these and picking one swaps the `<video src>` (preserving time + play state); plain `src` is then ignored. See "Toolbar features". |
 | `projection`        | `'equirectangular' \| 'fisheye' \| 'dual-fisheye'` | `'equirectangular'`| See "Supported projections" above. |
 | `stereo`            | `'auto' \| 'mono' \| 'top-bottom' \| 'side-by-side'` | `'auto'` | Stereo source layout. `auto` reads the MP4 Spherical metadata (`st3d` / `GSpherical`); else force a layout. Left eye rendered on sphere. |
+| `stereoMenu`        | `boolean \| 'auto'` | `'auto'` | Toolbar format picker (Mono / Top-Bottom / Side-by-Side) for sources with no metadata. `auto` shows it only when relevant; `true` always; `false` never. |
 | `lensFovDeg`        | `number` (deg)        | `180`              | Per-lens FOV for fisheye projections. Adjust if a specific camera under-/over-shoots. |
 | `autoplay`          | `boolean`             | `false`            | Implies `muted: true` (browser policy). |
 | `loop`              | `boolean`             | `false`            | |

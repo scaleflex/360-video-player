@@ -1,7 +1,7 @@
 import { addClass, createElement, removeClass } from '../utils/dom';
 import { addListener } from '../utils/events';
 import { formatTime } from '../utils/time';
-import type { QualityId, QualityLevel } from '../core/types';
+import type { QualityId, QualityLevel, StereoLayout, StereoMenuOption } from '../core/types';
 import { createProgressBar, type ProgressBar } from './progress-bar';
 import { createDropdown, type DropdownHandle } from './dropdown';
 
@@ -27,8 +27,19 @@ const VR_SVG =
   '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2 8 h20 a1 1 0 0 1 1 1 v6 a1 1 0 0 1 -1 1 h-6 l-3 -3 h-2 l-3 3 H2 a1 1 0 0 1 -1 -1 v-6 a1 1 0 0 1 1 -1 z"/></svg>';
 const WARNING_SVG =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+// "Layers" glyph — reads as stacked eye-images, i.e. the source format.
+const STEREO_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+/** Manual format-picker entries. Ids are the concrete {@link StereoLayout}
+ *  values so a selection maps straight onto `stereo`. */
+const STEREO_ITEMS: ReadonlyArray<{ id: StereoLayout; label: string }> = [
+  { id: 'mono', label: 'Mono' },
+  { id: 'top-bottom', label: 'Top-Bottom' },
+  { id: 'side-by-side', label: 'Side-by-Side' },
+];
 
 
 export interface ToolbarOptions {
@@ -41,6 +52,10 @@ export interface ToolbarOptions {
   speedButton?: boolean;
   /** Show the quality pill button (auto-hidden when no levels available). */
   qualityButton?: boolean;
+  /** Manual stereo-format picker visibility: `false` never builds it, `true`
+   *  always shows it, `'auto'` builds it hidden until the player deems it
+   *  relevant via `setStereoMenuVisible()`. */
+  stereoMenu?: StereoMenuOption;
 
   // ---- interaction callbacks ----
   onPlayPause: () => void;
@@ -49,6 +64,7 @@ export interface ToolbarOptions {
   onSeek: (time: number) => void;
   onSpeedChange: (rate: number) => void;
   onQualityChange?: (id: QualityId) => void;
+  onStereoChange?: (layout: StereoLayout) => void;
   onLoopToggle?: () => void;
   onFullscreen?: () => void;
   onEnterVR?: () => void;
@@ -69,6 +85,9 @@ export class Toolbar {
   private readonly speedDropdown: DropdownHandle | null;
   private readonly qualityBtn: HTMLButtonElement | null;
   private readonly qualityDropdown: DropdownHandle | null;
+  private readonly stereoBtn: HTMLButtonElement | null;
+  private readonly stereoDropdown: DropdownHandle | null;
+  private readonly stereoWrapper: HTMLElement | null;
   private readonly fsBtn: HTMLButtonElement | null;
   private readonly vrBtn: HTMLButtonElement | null;
 
@@ -183,6 +202,33 @@ export class Toolbar {
       this.qualityDropdown = null;
     }
 
+    if (options.stereoMenu) {
+      this.stereoWrapper = createElement('div', 'ci-360-video-controls-stereo');
+      this.stereoBtn = createElement('button', 'ci-360-video-controls-stereo-btn', {
+        type: 'button',
+        'aria-label': 'Video format',
+        'aria-expanded': 'false',
+        title: 'Video format (mono / 3D)',
+      });
+      this.stereoBtn.innerHTML = STEREO_SVG;
+      this.stereoDropdown = createDropdown({
+        items: STEREO_ITEMS.map((s) => ({ id: s.id, label: s.label })),
+        activeId: 'mono',
+        vertical: true, // long labels (Top-Bottom / Side-by-Side) stack cleanly
+        onSelect: (id) => this.handleStereoSelect(id as StereoLayout),
+      });
+      this.stereoWrapper.appendChild(this.stereoBtn);
+      this.stereoWrapper.appendChild(this.stereoDropdown.element);
+      // `'auto'` starts hidden — the player reveals it via setStereoMenuVisible()
+      // only when a source is ambiguous or already stereo. `true` shows always.
+      if (options.stereoMenu === 'auto') this.stereoWrapper.style.display = 'none';
+      right.appendChild(this.stereoWrapper);
+    } else {
+      this.stereoBtn = null;
+      this.stereoDropdown = null;
+      this.stereoWrapper = null;
+    }
+
     if (options.onLoopToggle) {
       this.loopBtn = createElement('button', 'ci-360-video-controls-loop-btn', {
         type: 'button',
@@ -272,6 +318,20 @@ export class Toolbar {
       );
     }
 
+    if (this.stereoBtn && this.stereoDropdown) {
+      this.cleanups.push(
+        addListener(this.stereoBtn, 'click', (e) => {
+          e.stopPropagation();
+          const wasOpen = this.stereoDropdown!.isOpen();
+          this.closeAllDropdowns();
+          if (!wasOpen) {
+            this.stereoDropdown!.open();
+            this.stereoBtn!.setAttribute('aria-expanded', 'true');
+          }
+        }),
+      );
+    }
+
     if (this.loopBtn) {
       this.cleanups.push(
         addListener(this.loopBtn, 'click', (e) => {
@@ -313,6 +373,16 @@ export class Toolbar {
       this.qualityDropdown.close();
       this.qualityBtn?.setAttribute('aria-expanded', 'false');
     }
+    if (this.stereoDropdown?.isOpen()) {
+      this.stereoDropdown.close();
+      this.stereoBtn?.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  private handleStereoSelect(layout: StereoLayout): void {
+    this.stereoDropdown?.setActiveId(layout);
+    this.opts.onStereoChange?.(layout);
+    this.closeAllDropdowns();
   }
 
   private handleSpeedSelect(rate: number): void {
@@ -468,6 +538,21 @@ export class Toolbar {
     this.qualityDropdown?.setActiveId(id);
     this.updateQualityLabel();
   }
+  /** Reflect the active stereo layout in the format picker (highlights the
+   *  matching row). No-op when the menu wasn't built. */
+  setStereoLayout(layout: StereoLayout): void {
+    this.stereoDropdown?.setActiveId(layout);
+  }
+  /** Show or hide the manual format picker. Only meaningful in `'auto'` mode;
+   *  `true`/`false` modes own their own visibility at build time. */
+  setStereoMenuVisible(visible: boolean): void {
+    if (!this.stereoWrapper) return;
+    this.stereoWrapper.style.display = visible ? '' : 'none';
+    if (!visible) {
+      this.stereoDropdown?.close();
+      this.stereoBtn?.setAttribute('aria-expanded', 'false');
+    }
+  }
   setGpuWarning(message: string | null): void {
     if (message) {
       addClass(this.gpuWarning, 'ci-360-video-controls-gpu-warning--visible');
@@ -508,6 +593,7 @@ export class Toolbar {
     this.cleanups = [];
     this.speedDropdown?.destroy();
     this.qualityDropdown?.destroy();
+    this.stereoDropdown?.destroy();
     this.progressBar.destroy();
     this.element.remove();
   }

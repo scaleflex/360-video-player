@@ -23,6 +23,7 @@ import '../projection/fisheye';
 import { createVideoTexture, type VideoTextureHandle } from '../texture/video-texture';
 import { mapUVForEye } from '../texture/eye-mapping';
 import { detectStereoLayout } from '../player/spherical-metadata';
+import { classifyStereoAmbiguity, type StereoAmbiguity } from '../player/stereo-heuristic';
 
 import { SPHERE_RADIUS, ViewStateManager } from '../controls/view-state';
 import { createOrbitControls360, type OrbitControls360Handle } from '../controls/orbit-controls-360';
@@ -126,6 +127,15 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
   private resolvedStereo: StereoLayout = 'mono';
   /** Aborts an in-flight `stereo: 'auto'` probe on destroy / source swap. */
   private stereoAbort: AbortController | null = null;
+  /** Frame-aspect suspicion, set once dimensions are known. Drives the dev hint
+   *  and the manual format menu's `'auto'` visibility — never the render. */
+  private stereoAmbiguity: StereoAmbiguity = 'mono';
+  /** `true` once the `'auto'` probe has settled (or there's nothing to probe),
+   *  so we know "resolved to mono" means "no metadata found", not "not yet". */
+  private stereoProbeDone = false;
+  /** One-shot guard so the "looks stereo but playing mono" dev hint warns once
+   *  per source, not on every metadata/probe re-evaluation. */
+  private stereoHintShown = false;
 
   /** Cardboard split-screen mode: render the scene twice (left/right) into two
    *  side-by-side viewports for phone-in-a-holder VR. */
@@ -337,12 +347,14 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
       if (video.readyState >= /* HAVE_METADATA */ 1) {
         buildMesh();
         checkGpu();
+        this.updateStereoAmbiguity();
       }
       this.adapterCleanups.push(
         this.subscribeAdapter('loadedmetadata', () => {
           buildMesh();
           checkGpu();
           this.refreshQualities();
+          this.updateStereoAmbiguity();
         }),
       );
 
@@ -462,12 +474,17 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
           vrButton: this.config.vrButton,
           speedButton: this.config.speedButton,
           qualityButton: this.config.qualityButton,
+          stereoMenu: this.config.stereoMenu,
           onPlayPause: () => (this.adapter?.isPaused() ? void this.play() : this.pause()),
           onMuteToggle: () => this.setMuted(!this.isMuted()),
           onVolumeChange: (v) => this.setVolume(v),
           onSeek: (t) => this.seek(t),
           onSpeedChange: (rate) => this.adapter?.setPlaybackRate(rate),
           onQualityChange: (id) => this.handleQualitySelection(id),
+          // A manual pick is a deliberate, explicit layout — route it through the
+          // same runtime path as `update({ stereo })` so it re-crops live and
+          // stops the source's `'auto'` probe from overriding the viewer.
+          onStereoChange: (layout) => this.update({ stereo: layout }),
           onLoopToggle: () => {
             if (!this.adapter) return;
             const v = this.adapter.getVideoElement();
@@ -487,6 +504,9 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
         // sources → the playing video's resolution). Refreshed again on
         // loadedmetadata / playing / qualitylevelsupdated.
         this.refreshQualities();
+        // Reflect any stereo state already known (cached metadata / a resolved
+        // 'auto' probe) into the format picker the moment the toolbar exists.
+        this.updateStereoMenuVisibility();
 
         // Idle auto-hide: any pointer activity inside the container resets the
         // 3s timer. Throttled to 100 ms so we don't reset the timer 60×/sec
@@ -894,16 +914,83 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
   /** Kick off a best-effort `st3d` metadata probe for an `'auto'` source.
    *  Resolves silently to nothing for non-MP4 / no-range sources. */
   private startStereoAutoDetect(src: string): void {
-    if (this.config.stereo !== 'auto' || !src) return;
+    // Fresh probe = fresh hint cycle for this source.
+    this.stereoProbeDone = false;
+    this.stereoHintShown = false;
+    if (this.config.stereo !== 'auto' || !src) {
+      // Nothing to probe — an explicit layout is already the final answer.
+      this.stereoProbeDone = true;
+      return;
+    }
     this.stereoAbort?.abort();
     const ac = new AbortController();
     this.stereoAbort = ac;
     void detectStereoLayout(src, ac.signal).then((layout) => {
       if (this.destroyed || ac.signal.aborted) return;
-      if (!layout || layout === this.resolvedStereo) return;
-      this.resolvedStereo = layout;
-      this.applyStereoToTexture();
+      if (layout && layout !== this.resolvedStereo) {
+        this.resolvedStereo = layout;
+        this.applyStereoToTexture();
+      }
+      // The probe has settled: a falsy `layout` means "no metadata found", so a
+      // still-mono result can now legitimately trigger the ambiguity hint/menu.
+      this.stereoProbeDone = true;
+      this.updateStereoMenuVisibility();
+      this.maybeHintAmbiguousStereo();
     });
+  }
+
+  /**
+   * Reconcile the toolbar's manual format picker with the current state.
+   * Always highlights the active layout; for `stereoMenu: 'auto'` it reveals the
+   * picker only when it's actually useful — the frame is an ambiguous stereo
+   * candidate, or a stereo layout is already active — and only on the
+   * equirectangular path (the only one that crops stereo). `true`/`false` own
+   * their visibility at build time, so `'auto'` is the only mode we drive here.
+   */
+  private updateStereoMenuVisibility(): void {
+    if (!this.toolbar) return;
+    this.toolbar.setStereoLayout(this.effectiveStereo());
+    if (this.config.stereoMenu !== 'auto') return;
+    const equirect = (this.config.projection ?? 'equirectangular') === 'equirectangular';
+    const relevant =
+      equirect && (this.stereoAmbiguity !== 'mono' || this.effectiveStereo() !== 'mono');
+    this.toolbar.setStereoMenuVisible(relevant);
+  }
+
+  /** Recompute the frame-aspect suspicion from the current video dimensions and
+   *  reconcile the dependent UI/hint. Called once dimensions are known. */
+  private updateStereoAmbiguity(): void {
+    if (!this.adapter) return;
+    const v = this.adapter.getVideoElement();
+    this.stereoAmbiguity = classifyStereoAmbiguity(v.videoWidth, v.videoHeight);
+    this.updateStereoMenuVisibility();
+    this.maybeHintAmbiguousStereo();
+  }
+
+  /**
+   * Emit a one-time developer hint when a source *looks* stereoscopic (square
+   * 1:1 or 4:1 frame) yet carries no Spherical metadata, so it is playing as
+   * mono. We never auto-correct — the shape is ambiguous (mono-180° is also
+   * 1:1) — but a console pointer tells the integrator exactly how to fix it.
+   * Only fires for `stereo: 'auto'` (an explicit layout means a choice was
+   * already made) on the equirectangular path.
+   */
+  private maybeHintAmbiguousStereo(): void {
+    if (this.stereoHintShown) return;
+    if (this.config.stereo !== 'auto') return;
+    if (!this.stereoProbeDone) return; // wait until "no metadata found" is certain
+    if (this.effectiveStereo() !== 'mono') return; // probe found a layout → all good
+    if ((this.config.projection ?? 'equirectangular') !== 'equirectangular') return;
+    if (this.stereoAmbiguity === 'mono') return; // frame shape is unremarkable
+    this.stereoHintShown = true;
+    const kind = this.stereoAmbiguity === 'tb-candidate' ? 'top-bottom' : 'side-by-side';
+    console.warn(
+      `CI360Video: this source's frame looks like it could be stereoscopic ` +
+        `"${kind}", but no Spherical Video metadata was found — it is playing as ` +
+        `mono. If it is stereo, set stereo:"${kind}" explicitly, re-inject ` +
+        `metadata (e.g. Google's spatialmedia tool), or let the viewer choose ` +
+        `via the format menu (stereoMenu).`,
+    );
   }
 
   update(config: Partial<CI360VideoConfig>): void {
@@ -923,6 +1010,7 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
       } else {
         this.applyStereoToTexture();
       }
+      this.updateStereoMenuVisibility();
     }
 
     // Projection / geometry / lens FOV need a mesh rebuild (built once in init).

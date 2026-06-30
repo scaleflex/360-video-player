@@ -247,4 +247,58 @@ describe('Toolbar', () => {
     expect(() => vi.advanceTimersByTime(500)).not.toThrow();
     vi.useRealTimers();
   });
+
+  // ---- manual stereo-format picker ----
+
+  it('no stereo menu is built when stereoMenu is falsy (the default)', () => {
+    const { toolbar } = makeToolbar();
+    expect(toolbar.element.querySelector('.ci-360-video-controls-stereo')).toBeNull();
+  });
+
+  it('stereoMenu:true builds the picker with Mono / Top-Bottom / Side-by-Side', () => {
+    const { toolbar } = makeToolbar({ stereoMenu: true });
+    const items = toolbar.element.querySelectorAll<HTMLElement>(
+      '.ci-360-video-controls-stereo .ci-360-video-dropdown-item',
+    );
+    expect(Array.from(items).map((i) => i.dataset.id)).toEqual([
+      'mono',
+      'top-bottom',
+      'side-by-side',
+    ]);
+  });
+
+  it('picking a format fires onStereoChange with the concrete layout', () => {
+    const onStereoChange = vi.fn();
+    const { toolbar } = makeToolbar({ stereoMenu: true, onStereoChange });
+    const btn = toolbar.element.querySelector<HTMLButtonElement>(
+      '.ci-360-video-controls-stereo-btn',
+    )!;
+    btn.click();
+    const dropdown = toolbar.element.querySelector('.ci-360-video-controls-stereo .ci-360-video-dropdown')!;
+    expect(dropdown.classList.contains('ci-360-video-dropdown--open')).toBe(true);
+    dropdown.querySelector<HTMLButtonElement>('[data-id="top-bottom"]')!.click();
+    expect(onStereoChange).toHaveBeenCalledWith('top-bottom');
+    expect(dropdown.classList.contains('ci-360-video-dropdown--open')).toBe(false);
+  });
+
+  it("stereoMenu:'auto' starts hidden and is revealed by setStereoMenuVisible(true)", () => {
+    const { toolbar } = makeToolbar({ stereoMenu: 'auto' });
+    const wrapper = toolbar.element.querySelector<HTMLElement>(
+      '.ci-360-video-controls-stereo',
+    )!;
+    expect(wrapper.style.display).toBe('none');
+    toolbar.setStereoMenuVisible(true);
+    expect(wrapper.style.display).not.toBe('none');
+    toolbar.setStereoMenuVisible(false);
+    expect(wrapper.style.display).toBe('none');
+  });
+
+  it('setStereoLayout highlights the matching row', () => {
+    const { toolbar } = makeToolbar({ stereoMenu: true });
+    toolbar.setStereoLayout('side-by-side');
+    const active = toolbar.element.querySelector<HTMLElement>(
+      '.ci-360-video-controls-stereo .ci-360-video-dropdown-item--active',
+    )!;
+    expect(active.dataset.id).toBe('side-by-side');
+  });
 });

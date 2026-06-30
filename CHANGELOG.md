@@ -15,6 +15,9 @@ All notable changes to `@cloudimage/360-video`.
   - **V2** `st3d` box (`stereo_mode` byte), and
   - **V1** `GSpherical` RDF/XML (`<GSpherical:StereoMode>`, used by ExoPlayer-style files such as `congo.mp4`).
   - Best-effort: HLS/DASH, non-MP4, no-range and CORS failures fall back to `'mono'` without throwing. New module `src/player/spherical-metadata.ts`; new exported type `StereoOption = StereoLayout | 'auto'`.
+- **Stereo fallback for sources without metadata** — covers older, re-encoded top-bottom / side-by-side clips that `'auto'` can't detect:
+  - **Manual format picker** (`stereoMenu: boolean | 'auto'`, default `'auto'`) — a toolbar control (Mono / Top-Bottom / Side-by-Side) that re-crops live via the existing `update({ stereo })` path. `'auto'` reveals it only when relevant (an ambiguous `1:1` / `4:1` frame with no metadata, or a stereo layout already active). New exported type `StereoMenuOption`.
+  - **Developer hint** — a one-time `console.warn` naming the suspected layout and how to fix it (set `stereo` explicitly, or re-inject metadata) when a frame looks stereo but plays mono. Frame shape is used only to *offer help*, never to auto-pick a layout (it's ambiguous — mono-180° is also `1:1`). New module `src/player/stereo-heuristic.ts`.
 
 ### Changed
 

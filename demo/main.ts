@@ -15,8 +15,12 @@
 
 import '../src/define'; // registers <ci-360-video>
 import type { CI360VideoElement } from '../src/web-component/ci-360-video';
-import type { CI360VideoConfig } from '../src/core/types';
+import type { CI360VideoConfig, StereoLayout } from '../src/core/types';
 import { fromFilerobotFile, type FilerobotFileLike } from '../src/filerobot/index';
+// Diagnostics for the Format tester: the same metadata + heuristic the player
+// uses internally, so the demo can show "does this source carry the data we need".
+import { detectStereoLayout, parseStereoModeFromMoov } from '../src/player/spherical-metadata';
+import { classifyStereoAmbiguity } from '../src/player/stereo-heuristic';
 
 declare global {
   interface Window { Prism?: { highlightAll(): void; highlightElement(el: Element): void } }
@@ -193,6 +197,7 @@ const EXAMPLE_GROUPS: ExampleGroup[] = [
   { label: 'Projection & source', items: [
     { path: '/examples/projections',   label: 'Projections' },
     { path: '/examples/stereo',        label: 'Stereo 3D' },
+    { path: '/examples/format-tester', label: 'Format tester' },
     { path: '/examples/initial-view',  label: 'Initial view' },
   ]},
   { label: 'Interaction', items: [
@@ -669,6 +674,7 @@ function renderDocConfiguration(): string {
       [opt('sources'), '<code>VideoSource[]</code>', '—', 'Pre-encoded variants (one file per resolution); the quality menu switches between them.'],
       [opt('projection'), `<code>'equirectangular' | 'fisheye' | 'dual-fisheye'</code>`, `<code>'equirectangular'</code>`, 'Source projection format.'],
       [opt('stereo'), `<code>'auto' | 'mono' | 'top-bottom' | 'side-by-side'</code>`, `<code>'auto'</code>`, '<code>auto</code> reads the MP4 Spherical metadata (<code>st3d</code> / <code>GSpherical</code>); else force a layout. The left eye is rendered in mono (non-VR) view.'],
+      [opt('stereoMenu'), `<code>boolean | 'auto'</code>`, `<code>'auto'</code>`, 'Toolbar format picker (Mono / Top-Bottom / Side-by-Side) so a viewer can fix a stereo source that has no metadata. <code>auto</code> shows it only when relevant (ambiguous frame, or stereo already active).'],
       [opt('lensFovDeg'), '<code>number</code>', '<code>180</code>', 'Per-lens field of view for fisheye projections.'],
       [opt('playerType'), `<code>'auto' | 'html5' | 'hls' | 'dash'</code>`, `<code>'auto'</code>`, 'Adapter selector; <code>auto</code> detects from the URL extension.'],
       [opt('crossOrigin'), '<code>string</code>', `<code>'anonymous'</code>`, '<code>&lt;video crossorigin&gt;</code> — keeps the WebGL texture untainted.'],
@@ -989,17 +995,20 @@ const STEREOS: { id: 'auto' | 'mono' | 'top-bottom' | 'side-by-side'; label: str
   { id: 'mono',         label: 'Mono' },
 ];
 function renderExampleStereo(): string {
-  return examplePage('Stereo 3D', 'For stereo sources the player renders the <strong>left eye</strong> on the sphere (non-VR mono view). Leave <code>stereo: \'auto\'</code> (the default) and the layout is read from the MP4\'s Spherical metadata (<code>st3d</code> / <code>GSpherical</code>) — no manual toggle.', `
+  return examplePage('Stereo 3D', 'For stereo sources the player renders the <strong>left eye</strong> on the sphere (non-VR mono view). Leave <code>stereo: \'auto\'</code> (the default) and the layout is read from the MP4\'s Spherical metadata (<code>st3d</code> / <code>GSpherical</code>). When a source <em>has no metadata</em> — common for older, re-encoded clips — force the layout or let the viewer pick it from the toolbar <strong>format menu</strong>.', `
     <div class="demo-example-controls">
       ${STEREOS.map((s, i) => `<button class="demo-btn demo-btn--ghost ex-stereo-btn${i === 0 ? ' is-active' : ''}" data-stereo="${s.id}" aria-pressed="${i === 0}">${s.label}</button>`).join('')}
     </div>
     ${liveHost('ex-stereo')}
-    <p class="demo-doc-lead" style="font-size:14px">This sample (<code>congo.mp4</code>) is a real <strong>top-bottom</strong> stereo source. <strong>Auto</strong> reads its embedded <code>st3d</code> metadata and resolves to Top-Bottom on its own; the other buttons force a layout so you can compare (Mono shows the un-cropped, doubled-up frame).</p>
+    <p class="demo-doc-lead" style="font-size:14px">This sample (<code>congo.mp4</code>) is a real <strong>top-bottom</strong> stereo source. <strong>Auto</strong> reads its embedded <code>st3d</code> metadata and resolves to Top-Bottom on its own; the other buttons force a layout so you can compare (Mono shows the un-cropped, doubled-up frame). The <strong>format picker</strong> in the toolbar (the layers icon) lets a viewer switch layout at runtime — handy when a source carries no metadata.</p>
     ${codeBlock(`new CI360Video('#player', {
   src: '/stereo-360.mp4',
   // 'auto' (default) reads st3d metadata on MP4 sources.
   // Force it with 'mono' | 'top-bottom' | 'side-by-side'.
   stereo: 'auto',
+  // Toolbar format picker. 'auto' (default) shows it only when relevant;
+  // set true to always offer it, false to hide it.
+  stereoMenu: 'auto',
 });`, 'typescript')}
   `);
 }
@@ -1007,7 +1016,7 @@ function hydrateExampleStereo(root: HTMLElement): void {
   const host = root.querySelector<HTMLElement>('#ex-stereo');
   if (!host) return;
   const make = (stereo: 'auto' | 'mono' | 'top-bottom' | 'side-by-side') =>
-    mountPlayer(host, { src: STEREO_TB, stereo, autoplay: true, muted: true, loop: true });
+    mountPlayer(host, { src: STEREO_TB, stereo, stereoMenu: true, autoplay: true, muted: true, loop: true });
   make('auto');
   root.querySelectorAll<HTMLButtonElement>('.ex-stereo-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1017,6 +1026,176 @@ function hydrateExampleStereo(root: HTMLElement): void {
         b.setAttribute('aria-pressed', String(on));
       });
       make(btn.dataset.stereo as 'auto' | 'mono' | 'top-bottom' | 'side-by-side');
+    });
+  });
+}
+
+// -- Format tester (temporary playground) -------------------------------------
+// A full player wired to the new stereo fallback: load any clip from a URL or
+// from disk, force a layout with the quick buttons, or use the toolbar's format
+// picker (the layers icon). NOTE: this page is a temporary testing aid — local
+// files are served as `blob:` URLs, which can't be range-probed, so `'auto'`
+// always resolves to mono for them; that's exactly the "no metadata" case the
+// format picker is meant to fix.
+function renderExampleTester(): string {
+  return examplePage(
+    'Format tester',
+    'Drop in <em>any</em> 360° clip — by URL or from your computer — and exercise the full player with the new stereo fallback. Use the quick buttons to force a layout, or the toolbar <strong>format picker</strong> (layers icon) to switch it live. The panel below reports exactly <strong>what data the player can read from your source</strong> — Spherical metadata, frame size and shape — so you can tell at a glance whether <code>auto</code> will work or you need to set the layout yourself.',
+    `
+    <div class="demo-example-controls" style="flex-wrap:wrap;gap:10px;align-items:center">
+      <input id="tester-url" type="text" placeholder="https://…/video.mp4 (or .m3u8 / .mpd)" value="${STEREO_TB}"
+        style="flex:1 1 320px;min-width:240px;padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.18);background:rgba(0,0,0,0.25);color:inherit;font-size:13px" />
+      <button class="demo-btn" data-act="load-url">Load URL</button>
+      <label class="demo-btn demo-btn--ghost" style="cursor:pointer;margin:0">Load file…<input id="tester-file" type="file" accept="video/*" style="display:none" /></label>
+    </div>
+    <div class="demo-example-controls">
+      ${STEREOS.map((s, i) => `<button class="demo-btn demo-btn--ghost tester-stereo-btn${i === 0 ? ' is-active' : ''}" data-stereo="${s.id}" aria-pressed="${i === 0}">${s.label}</button>`).join('')}
+    </div>
+    ${liveHost('ex-tester')}
+    <div id="tester-report" style="margin-top:14px;padding:14px 16px;border-radius:12px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.12);font-size:13px;line-height:1.85">
+      <strong style="display:block;margin-bottom:6px">Source data the player sees</strong>
+      <div>Spherical metadata: <code id="rep-meta">—</code></div>
+      <div>Frame size: <code id="rep-size">—</code></div>
+      <div>Frame shape: <code id="rep-shape">—</code></div>
+      <div><code>stereo: 'auto'</code> resolves to: <code id="rep-auto">—</code></div>
+      <div id="rep-advice" style="margin-top:8px;opacity:0.95"></div>
+    </div>
+    <p class="demo-doc-lead" style="font-size:14px">Make a metadata-less top-bottom file to test the fallback: <code>ffmpeg -i pano.mp4 -filter_complex "[0:v]split=2[a][b];[a][b]vstack" -an tb_nometa.mp4</code> — load it here, watch it play doubled-up as mono, then pick <strong>Top-Bottom</strong> from the toolbar format menu to fix it.</p>
+    ${codeBlock(`new CI360Video('#player', {
+  src: '/my-360.mp4',
+  stereo: 'auto',     // detects metadata; falls back to mono without it
+  stereoMenu: true,   // always offer the manual format picker
+});`, 'typescript')}
+  `,
+  );
+}
+function hydrateExampleTester(root: HTMLElement): void {
+  const host = root.querySelector<HTMLElement>('#ex-tester');
+  if (!host) return;
+  const urlInput = root.querySelector<HTMLInputElement>('#tester-url');
+  const fileInput = root.querySelector<HTMLInputElement>('#tester-file');
+  if (!urlInput || !fileInput) return;
+
+  const rep = {
+    meta: root.querySelector<HTMLElement>('#rep-meta'),
+    size: root.querySelector<HTMLElement>('#rep-size'),
+    shape: root.querySelector<HTMLElement>('#rep-shape'),
+    auto: root.querySelector<HTMLElement>('#rep-auto'),
+    advice: root.querySelector<HTMLElement>('#rep-advice'),
+  };
+
+  let objUrl: string | null = null;
+  let lastFile: File | null = null;
+  let src: string = STEREO_TB;
+  let stereo: 'auto' | 'mono' | 'top-bottom' | 'side-by-side' = 'auto';
+  // Diagnostics state, recomputed per load; advice waits on both async checks.
+  type ShapeKind = 'mono' | 'tb-candidate' | 'sbs-candidate';
+  let metaLayout: StereoLayout | null = null;
+  let shape: ShapeKind | null = null;
+  let token = 0; // guards against a slow probe from a previous source landing late
+
+  const SHAPE_LABEL: Record<ShapeKind, string> = {
+    mono: 'normal ≈2:1 → mono',
+    'tb-candidate': 'square ≈1:1 → top-bottom candidate',
+    'sbs-candidate': 'wide ≈4:1 → side-by-side candidate',
+  };
+
+  const renderAdvice = (): void => {
+    if (!rep.advice) return;
+    if (rep.auto) rep.auto.textContent = metaLayout ?? 'mono (no metadata found)';
+    if (metaLayout) {
+      rep.advice.innerHTML = `✅ <strong>Metadata present.</strong> <code>stereo: 'auto'</code> detects <code>${metaLayout}</code> on its own — nothing to configure.`;
+    } else if (shape === 'tb-candidate' || shape === 'sbs-candidate') {
+      const guess = shape === 'tb-candidate' ? 'top-bottom' : 'side-by-side';
+      rep.advice.innerHTML = `⚠️ <strong>No metadata, but the frame looks stereo.</strong> <code>auto</code> falls back to mono (doubled-up). Set <code>stereo: '${guess}'</code>, re-inject metadata, or pick the layout from the toolbar format menu.`;
+    } else if (shape === 'mono') {
+      rep.advice.innerHTML = `🟢 No stereo metadata and a normal mono shape — most likely a plain mono 360° video. Nothing to do.`;
+    } else {
+      rep.advice.textContent = '';
+    }
+  };
+
+  const inspect = async (): Promise<void> => {
+    const mine = ++token;
+    metaLayout = null;
+    shape = null;
+    if (rep.meta) rep.meta.textContent = 'checking…';
+    if (rep.size) rep.size.textContent = '—';
+    if (rep.shape) rep.shape.textContent = '—';
+    if (rep.auto) rep.auto.textContent = '—';
+    if (rep.advice) rep.advice.textContent = '';
+
+    // Metadata: a local file can be parsed directly from its bytes; a URL is
+    // range-probed over the network (exactly what the player does for 'auto').
+    try {
+      if (lastFile && src === objUrl) {
+        const buf = new Uint8Array(await lastFile.arrayBuffer());
+        metaLayout = parseStereoModeFromMoov(buf);
+      } else {
+        metaLayout = await detectStereoLayout(src);
+      }
+    } catch {
+      metaLayout = null;
+    }
+    if (mine !== token) return; // a newer load superseded this probe
+    if (rep.meta) rep.meta.textContent = metaLayout ?? 'none found';
+    renderAdvice();
+  };
+
+  const hookVideo = (el: CI360VideoElement): void => {
+    const v = el.shadowRoot?.querySelector('video');
+    if (!v) return;
+    const fill = (): void => {
+      if (!v.videoWidth) return;
+      if (rep.size) rep.size.textContent = `${v.videoWidth}×${v.videoHeight}`;
+      shape = classifyStereoAmbiguity(v.videoWidth, v.videoHeight);
+      if (rep.shape) rep.shape.textContent = SHAPE_LABEL[shape];
+      renderAdvice();
+    };
+    if (v.videoWidth) fill();
+    else v.addEventListener('loadedmetadata', fill, { once: true });
+  };
+
+  const remount = (): void => {
+    const el = mountPlayer(host, { src, stereo, stereoMenu: true, autoplay: true, muted: true, loop: true });
+    hookVideo(el);
+    void inspect();
+  };
+
+  const highlight = (id: string): void =>
+    root.querySelectorAll<HTMLButtonElement>('.tester-stereo-btn').forEach((b) => {
+      const on = b.dataset.stereo === id;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+
+  remount();
+
+  root.querySelector<HTMLButtonElement>('[data-act="load-url"]')?.addEventListener('click', () => {
+    const v = urlInput.value.trim();
+    if (!v) return;
+    if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; }
+    lastFile = null;
+    src = v;
+    remount();
+  });
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files?.[0];
+    if (!f) return;
+    if (objUrl) URL.revokeObjectURL(objUrl);
+    lastFile = f;
+    objUrl = URL.createObjectURL(f);
+    src = objUrl;
+    urlInput.value = f.name; // show what's loaded; the blob URL is internal
+    remount();
+  });
+
+  root.querySelectorAll<HTMLButtonElement>('.tester-stereo-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      stereo = btn.dataset.stereo as 'auto' | 'mono' | 'top-bottom' | 'side-by-side';
+      highlight(stereo);
+      remount();
     });
   });
 }
@@ -1250,6 +1429,7 @@ const PAGES: Record<string, PageDef> = {
   '/examples/react':            { render: renderExampleReact },
   '/examples/projections':      { render: renderExampleProjections,  hydrate: hydrateExampleProjections },
   '/examples/stereo':           { render: renderExampleStereo,       hydrate: hydrateExampleStereo },
+  '/examples/format-tester':    { render: renderExampleTester,       hydrate: hydrateExampleTester },
   '/examples/initial-view':     { render: renderExampleInitialView,  hydrate: hydrateExampleInitialView },
   '/examples/controls-and-gyro':{ render: renderExampleControls,     hydrate: hydrateExampleControls },
   '/examples/events':           { render: renderExampleEvents,       hydrate: hydrateExampleEvents },

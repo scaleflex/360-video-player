@@ -12,6 +12,9 @@ export const DEFAULT_CONFIG: CI360VideoConfig = {
   // 'auto' probes Spherical Video V2 (`st3d`) metadata on MP4 sources and
   // resolves to the declared layout; mono content (and non-MP4) stays mono.
   stereo: 'auto',
+  // Manual format picker is shown only when relevant (ambiguous frame with no
+  // metadata, or a stereo layout already active). See StereoMenuOption.
+  stereoMenu: 'auto',
   lensFovDeg: 180,
 
   // playback
@@ -80,6 +83,11 @@ export function toNumber(v: string): number | undefined {
   return isNaN(n) ? undefined : n;
 }
 
+/** Coerce a tri-state attribute that accepts `true` / `false` / `'auto'`. */
+export function toBoolOrAuto(v: string): boolean | 'auto' {
+  return v.trim().toLowerCase() === 'auto' ? 'auto' : toBool(v);
+}
+
 /**
  * kebab-suffix ↔ camelCase config key map plus a coercion function. Shared by
  * the legacy `data-ci-360-video-*` reader and the `<ci-360-video>` custom
@@ -90,6 +98,7 @@ export const ATTR_MAP: Record<string, { key: keyof CI360VideoConfig; coerce: (v:
   src:                    { key: 'src',                 coerce: String },
   projection:             { key: 'projection',          coerce: String },
   stereo:                 { key: 'stereo',              coerce: String },
+  'stereo-menu':          { key: 'stereoMenu',          coerce: toBoolOrAuto },
   'lens-fov-deg':         { key: 'lensFovDeg',          coerce: toNumber },
 
   autoplay:               { key: 'autoplay',            coerce: toBool },
@@ -252,6 +261,14 @@ export function validateConfig(config: CI360VideoConfig): string[] {
     errors.push(
       `Invalid stereo: "${config.stereo}". Must be one of: auto, mono, top-bottom, side-by-side.`,
     );
+  }
+  if (
+    config.stereoMenu !== undefined &&
+    config.stereoMenu !== true &&
+    config.stereoMenu !== false &&
+    config.stereoMenu !== 'auto'
+  ) {
+    errors.push(`Invalid stereoMenu: "${config.stereoMenu}". Must be true, false, or "auto".`);
   }
   if (config.theme && !['light', 'dark'].includes(config.theme)) {
     errors.push(`Invalid theme: "${config.theme}". Must be "light" or "dark".`);

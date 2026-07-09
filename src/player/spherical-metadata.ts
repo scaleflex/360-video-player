@@ -13,10 +13,10 @@ import type { StereoLayout } from '../core/types';
  *    an RDF/XML blob in a `uuid` box, with a
  *    `<GSpherical:StereoMode>top-bottom</…>` element.
  *
- * This lets us answer "is this source stereo, and how is it laid out?"
- * **deterministically** instead of guessing from the frame aspect ratio (which
- * is ambiguous once 180° content is in play — mono-180° and top-bottom-360°
- * are both 1:1). The browser doesn't expose this metadata, so we read it
+ * This lets us answer "is this source spherical (360°), is it stereo, and how
+ * is it laid out?" **deterministically** instead of guessing from the frame
+ * aspect ratio (which is ambiguous once 180° content is in play — mono-180° and
+ * top-bottom-360° are both 1:1). The browser doesn't expose this metadata, so we read it
  * ourselves with HTTP range requests over just the `moov` box (no media data).
  *
  * Scope: MP4 / ISO-BMFF progressive sources only. HLS/DASH and non-ISO
@@ -24,6 +24,19 @@ import type { StereoLayout } from '../core/types';
  * layout. Every failure path (no range support, network error, box absent,
  * malformed) returns `null` and never throws — detection is best-effort.
  */
+
+/**
+ * Result of a spherical-metadata probe: whether the source is flagged as a 360°
+ * (spherical) video, and its stereo layout when declared.
+ */
+export interface SphericalMetadata {
+  /** `true` when the file carries a spherical marker (V2 `sv3d` box or V1
+   *  `<GSpherical:Spherical>true`). Says nothing about stereo. */
+  spherical: boolean;
+  /** Declared stereo layout (V2 `st3d` / V1 `<StereoMode>`), or `null` when
+   *  absent (treat as mono). */
+  stereo: StereoLayout | null;
+}
 
 /** `st3d` `stereo_mode` byte values, per the Spherical Video V2 spec. */
 const STEREO_MODE: Record<number, StereoLayout> = {
@@ -40,6 +53,14 @@ const ST3D = [0x73, 0x74, 0x33, 0x64];
 // flags(3) + stereo_mode(1). Validating the size + version around a fourcc
 // match makes a coincidental byte sequence essentially impossible.
 const ST3D_BOX_SIZE = 13;
+
+// FourCC bytes for the Spherical Video V2 boxes: 'sv3d' (spherical container)
+// and its mandatory first child 'svhd' (spherical header). We treat a source as
+// spherical when an `sv3d` box is immediately followed by an `svhd` child —
+// validating the child fourcc makes a coincidental byte match essentially
+// impossible (mirrors the st3d size/version check).
+const SV3D = [0x73, 0x76, 0x33, 0x64];
+const SVHD = [0x73, 0x76, 0x68, 0x64];
 
 function readU32(buf: Uint8Array, offset: number): number {
   return (
@@ -60,6 +81,9 @@ const SV1_STEREO: Record<string, StereoLayout> = {
 };
 // The value text immediately follows the opening tag, which ends with this.
 const SV1_TAG = ':StereoMode>';
+// Spherical V1 marks 360° content with `<GSpherical:Spherical>true</…>`. The
+// opening tag ends with this; the value ('true'/'false') follows.
+const SV1_SPHERICAL_TAG = ':Spherical>';
 
 /** Index of the first occurrence of an ASCII needle in `buf`, or -1. */
 function indexOfAscii(buf: Uint8Array, needle: string, from = 0): number {
@@ -108,6 +132,45 @@ function parseV1(moov: Uint8Array): StereoLayout | null {
   return SV1_STEREO[value.trim().toLowerCase()] ?? null;
 }
 
+/** Spherical V2: a validated `sv3d` container (its first child is `svhd`). */
+function hasSphericalV2(moov: Uint8Array): boolean {
+  // fourcc(4) + child size(4) + child fourcc(4) = 12 bytes needed from the match.
+  for (let i = 0; i + 12 <= moov.length; i++) {
+    if (
+      moov[i] !== SV3D[0] ||
+      moov[i + 1] !== SV3D[1] ||
+      moov[i + 2] !== SV3D[2] ||
+      moov[i + 3] !== SV3D[3]
+    ) {
+      continue;
+    }
+    // The sv3d container's first child box must be `svhd` (at fourcc + size(4)).
+    if (
+      moov[i + 8] === SVHD[0] &&
+      moov[i + 9] === SVHD[1] &&
+      moov[i + 10] === SVHD[2] &&
+      moov[i + 11] === SVHD[3]
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Spherical V1: `<GSpherical:Spherical>true</…>` in the RDF/XML `uuid` blob. */
+function hasSphericalV1(moov: Uint8Array): boolean {
+  const tag = indexOfAscii(moov, SV1_SPHERICAL_TAG);
+  if (tag < 0) return false;
+  const start = tag + SV1_SPHERICAL_TAG.length;
+  const end = indexOfAscii(moov, '<', start); // value runs up to the closing tag
+  if (end < 0) return false;
+  // Cap the read so a missing '<' can't scan the whole buffer. 16 covers 'true'
+  // plus any surrounding whitespace.
+  let value = '';
+  for (let i = start; i < end && i < start + 16; i++) value += String.fromCharCode(moov[i]);
+  return value.trim().toLowerCase() === 'true';
+}
+
 /**
  * Scan an in-memory `moov` buffer for Spherical Video stereo metadata (V2
  * `st3d` first, then the V1 XML fallback) and return the layout it declares.
@@ -121,6 +184,18 @@ function parseV1(moov: Uint8Array): StereoLayout | null {
  */
 export function parseStereoModeFromMoov(moov: Uint8Array): StereoLayout | null {
   return parseV2(moov) ?? parseV1(moov);
+}
+
+/**
+ * Like {@link parseStereoModeFromMoov}, but also reports whether the source is
+ * flagged spherical (V2 `sv3d` or V1 `<Spherical>true`). Pure; the stereo half
+ * is identical to `parseStereoModeFromMoov`.
+ */
+export function parseSphericalMetadataFromMoov(moov: Uint8Array): SphericalMetadata {
+  return {
+    spherical: hasSphericalV2(moov) || hasSphericalV1(moov),
+    stereo: parseV2(moov) ?? parseV1(moov),
+  };
 }
 
 /** True for URLs we should not probe — streaming manifests carry no `moov`. */
@@ -181,15 +256,24 @@ const MAX_TOP_LEVEL_BOXES = 32;
 // the rare overflow we fall back to `'mono'` (best-effort, never throws).
 const MAX_MOOV_BYTES = 32 * 1024 * 1024;
 
+/** Options for the network detection helpers. */
+export interface DetectOptions {
+  signal?: AbortSignal;
+  /** Cap on how many bytes of `moov` are pulled into memory. Defaults to
+   *  {@link MAX_MOOV_BYTES}. The stereo/spherical boxes sit near the front of
+   *  `moov` (in `stsd`, ahead of the big sample tables), so callers that want a
+   *  cheap probe on arbitrary sources can pass a much smaller cap (e.g. 512 KB). */
+  maxMoovBytes?: number;
+}
+
 /**
  * Locate the `moov` box by walking top-level box headers via range requests
  * (skipping over `mdat`/`ftyp`/`free` without downloading their bodies), then
- * fetch and parse just that box. Returns the detected stereo layout, or `null`.
+ * fetch just that box (capped at `maxMoovBytes`). Returns its bytes, or `null`
+ * on any failure (no range support, network error, box absent, malformed).
  */
-export async function detectStereoLayout(
-  url: string,
-  signal?: AbortSignal,
-): Promise<StereoLayout | null> {
+async function fetchMoov(url: string, options: DetectOptions): Promise<Uint8Array | null> {
+  const { signal, maxMoovBytes = MAX_MOOV_BYTES } = options;
   if (!url || isStreamingManifest(url)) return null;
 
   try {
@@ -224,10 +308,9 @@ export async function detectStereoLayout(
       if (size < 8) return null; // malformed
 
       if (type === 'moov') {
-        const moovLen = Math.min(size, MAX_MOOV_BYTES);
+        const moovLen = Math.min(size, maxMoovBytes);
         const moov = await readChunk(url, offset, moovLen, signal);
-        if (!moov) return null;
-        return parseStereoModeFromMoov(moov.bytes);
+        return moov ? moov.bytes : null;
       }
 
       offset += size;
@@ -237,4 +320,31 @@ export async function detectStereoLayout(
     // Aborted, network failure, CORS — all best-effort, all → null.
     return null;
   }
+}
+
+/**
+ * Fetch and parse the source's Spherical Video metadata: whether it's flagged
+ * spherical (360°) and its stereo layout. Returns `null` only when no `moov`
+ * could be read (non-MP4, no range support, network/CORS failure) — never
+ * throws. MP4 / ISO-BMFF progressive sources only.
+ */
+export async function detectSphericalMetadata(
+  url: string,
+  options: DetectOptions = {},
+): Promise<SphericalMetadata | null> {
+  const moov = await fetchMoov(url, options);
+  return moov ? parseSphericalMetadataFromMoov(moov) : null;
+}
+
+/**
+ * Detect the source's stereo layout (Spherical Video V2 `st3d` / V1 XML), or
+ * `null` when absent/unreadable. Thin wrapper over {@link detectSphericalMetadata}
+ * kept for backward compatibility with the player's `stereo:'auto'` path.
+ */
+export async function detectStereoLayout(
+  url: string,
+  signal?: AbortSignal,
+): Promise<StereoLayout | null> {
+  const meta = await detectSphericalMetadata(url, { signal });
+  return meta?.stereo ?? null;
 }

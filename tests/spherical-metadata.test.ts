@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   parseStereoModeFromMoov,
+  parseSphericalMetadataFromMoov,
   detectStereoLayout,
+  detectSphericalMetadata,
 } from '../src/player/spherical-metadata';
 
 // ---- ISO-BMFF box builders ---------------------------------------------------
@@ -18,6 +20,30 @@ function box(type: string, payload: Uint8Array): Uint8Array {
 /** A spec-shaped `st3d` full box: version(1) + flags(3) + stereo_mode(1). */
 function st3d(mode: number): Uint8Array {
   return box('st3d', new Uint8Array([0, 0, 0, 0, mode]));
+}
+
+/** A `svhd` spherical-header full box (version/flags + a metadata_source name). */
+function svhd(): Uint8Array {
+  return box('svhd', new Uint8Array([0, 0, 0, 0, 0x53, 0x74, 0x00]));
+}
+
+/** A spec-shaped `sv3d` spherical container whose first child is `svhd`. */
+function sv3d(): Uint8Array {
+  return box('sv3d', svhd());
+}
+
+/** A Spherical V1 RDF/XML `uuid` blob with an explicit `<Spherical>` flag. */
+function sphericalV1(spherical: 'true' | 'false', stereoMode = 'none'): Uint8Array {
+  const xml =
+    '<?xml version="1.0"?><rdf:SphericalVideo ' +
+    'xmlns:GSpherical="http://ns.google.com/videos/1.0/spherical/">' +
+    `<GSpherical:Spherical>${spherical}</GSpherical:Spherical>` +
+    '<GSpherical:ProjectionType>equirectangular</GSpherical:ProjectionType>' +
+    `<GSpherical:StereoMode>${stereoMode}</GSpherical:StereoMode>` +
+    '</rdf:SphericalVideo>';
+  const payload = new Uint8Array(xml.length);
+  for (let i = 0; i < xml.length; i++) payload[i] = xml.charCodeAt(i);
+  return box('uuid', payload);
 }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
@@ -160,5 +186,85 @@ describe('detectStereoLayout', () => {
   it('returns null on network error (best-effort, never throws)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
     await expect(detectStereoLayout('https://cdn.example/down.mp4')).resolves.toBeNull();
+  });
+});
+
+// ---- spherical (360°) detection ---------------------------------------------
+
+describe('parseSphericalMetadataFromMoov', () => {
+  it('V2: sv3d container (with svhd child) → spherical', () => {
+    const moov = concat(box('mvhd', new Uint8Array(20)), sv3d(), st3d(1));
+    expect(parseSphericalMetadataFromMoov(moov)).toEqual({ spherical: true, stereo: 'top-bottom' });
+  });
+
+  it('V1: <GSpherical:Spherical>true → spherical', () => {
+    expect(parseSphericalMetadataFromMoov(sphericalV1('true', 'left-right'))).toEqual({
+      spherical: true,
+      stereo: 'side-by-side',
+    });
+  });
+
+  it('spherical without any stereo box → { spherical: true, stereo: null }', () => {
+    const moov = concat(box('mvhd', new Uint8Array(20)), sv3d());
+    expect(parseSphericalMetadataFromMoov(moov)).toEqual({ spherical: true, stereo: null });
+  });
+
+  it('stereo (st3d) but no spherical marker → { spherical: false, stereo }', () => {
+    expect(parseSphericalMetadataFromMoov(st3d(1))).toEqual({ spherical: false, stereo: 'top-bottom' });
+  });
+
+  it('V1 <Spherical>false is not treated as spherical', () => {
+    expect(parseSphericalMetadataFromMoov(sphericalV1('false')).spherical).toBe(false);
+  });
+
+  it('plain moov (no metadata) → { spherical: false, stereo: null }', () => {
+    const moov = concat(box('mvhd', new Uint8Array(20)), box('trak', new Uint8Array(8)));
+    expect(parseSphericalMetadataFromMoov(moov)).toEqual({ spherical: false, stereo: null });
+  });
+
+  it('ignores a bare "sv3d" fourcc without an svhd child', () => {
+    const bogus = concat(new Uint8Array([0, 0, 0, 16]), new Uint8Array([0x73, 0x76, 0x33, 0x64]), new Uint8Array(8));
+    expect(parseSphericalMetadataFromMoov(bogus).spherical).toBe(false);
+  });
+});
+
+describe('detectSphericalMetadata', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reports spherical + stereo for a 360 stereo MP4', async () => {
+    const file = concat(box('ftyp', new Uint8Array(8)), box('moov', concat(sv3d(), st3d(2))));
+    vi.stubGlobal('fetch', mockRangeFetch(file));
+    await expect(detectSphericalMetadata('https://cdn.example/vr360.mp4')).resolves.toEqual({
+      spherical: true,
+      stereo: 'side-by-side',
+    });
+  });
+
+  it('returns null (not a false negative) for a non-MP4 / no-range source', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ status: 200, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) }) as unknown as Response),
+    );
+    await expect(detectSphericalMetadata('https://cdn.example/norange.mp4')).resolves.toBeNull();
+  });
+
+  it('a too-small maxMoovBytes truncates the moov and misses the markers', async () => {
+    // Pad the moov so sv3d/st3d land beyond a tiny cap.
+    const file = concat(
+      box('ftyp', new Uint8Array(8)),
+      box('moov', concat(box('mvhd', new Uint8Array(4096)), sv3d(), st3d(1))),
+    );
+    vi.stubGlobal('fetch', mockRangeFetch(file));
+    await expect(detectSphericalMetadata('https://cdn.example/vr360.mp4', { maxMoovBytes: 64 })).resolves.toEqual({
+      spherical: false,
+      stereo: null,
+    });
+    // The default cap reads the whole moov and finds them.
+    await expect(detectSphericalMetadata('https://cdn.example/vr360.mp4')).resolves.toEqual({
+      spherical: true,
+      stereo: 'top-bottom',
+    });
   });
 });

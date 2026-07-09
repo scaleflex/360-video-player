@@ -29,6 +29,11 @@
       "import": "./dist/filerobot/index.js",
       "require": "./dist/filerobot/index.cjs"
     },
+    "./metadata": {
+      "types": "./dist/metadata.d.ts",
+      "import": "./dist/metadata.js",
+      "require": "./dist/metadata.cjs"
+    },
     "./css": "./dist/style.css"
   },
   "files": [
@@ -48,8 +53,9 @@
     "dev": "vite --config config/vite.demo.config.ts",
     "dev:react": "vite --config config/vite.react-demo.config.ts",
     "sandbox": "vite --config sandbox/vite.config.ts",
-    "build": "npm run build:bundle && npm run build:define && npm run build:cdn && npm run build:react && npm run build:filerobot && node scripts/verify-bundle.mjs",
+    "build": "npm run build:bundle && npm run build:define && npm run build:cdn && npm run build:react && npm run build:filerobot && npm run build:metadata && node scripts/verify-bundle.mjs",
     "build:bundle": "vite build --config config/vite.config.ts",
+    "build:metadata": "vite build --config config/vite.metadata.config.ts",
     "build:define": "vite build --config config/vite.define.config.ts",
     "build:cdn": "vite build --config config/vite.cdn.config.ts",
     "build:react": "vite build --config config/vite.react.config.ts",

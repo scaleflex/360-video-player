@@ -116,6 +116,35 @@ describe('ambiguous-stereo dev hint', () => {
     pn.destroy();
   });
 
+  it("stereoMenu:'auto' stays hidden on an ambiguous frame when a layout is set explicitly", async () => {
+    // An explicit `stereo` is a decision already made: the ambiguity signal must
+    // not reveal the picker (there'd be no accompanying hint to explain it).
+    const container = makeContainer();
+    const p = new CI360Video(container, { src: 'old.mp4', stereo: 'mono' });
+    await flushAsync();
+    loadWithDims(container, 4096, 4096); // 1:1 → ambiguous shape, but stereo is explicit
+    await flushAsync();
+
+    const wrapper = container.querySelector<HTMLElement>('.ci-360-video-controls-stereo')!;
+    expect(wrapper.style.display).toBe('none');
+    p.destroy();
+  });
+
+  it("stereoMenu:'auto' hides the picker after switching to a non-equirect projection", async () => {
+    const container = makeContainer();
+    const p = new CI360Video(container, { src: 'old.mp4' });
+    await flushAsync();
+    loadWithDims(container, 4096, 4096); // 1:1 equirect → picker revealed
+    await flushAsync();
+    const wrapper = container.querySelector<HTMLElement>('.ci-360-video-controls-stereo')!;
+    expect(wrapper.style.display).not.toBe('none');
+
+    // Stereo cropping is equirect-only, so the picker is irrelevant for fisheye.
+    p.update({ projection: 'fisheye' });
+    expect(wrapper.style.display).toBe('none');
+    p.destroy();
+  });
+
   it('a manual format pick switches the player to that explicit layout (and stops nagging)', async () => {
     const container = makeContainer();
     const p = new CI360Video(container, { src: 'old.mp4' });

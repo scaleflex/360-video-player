@@ -952,8 +952,14 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
     this.toolbar.setStereoLayout(this.effectiveStereo());
     if (this.config.stereoMenu !== 'auto') return;
     const equirect = (this.config.projection ?? 'equirectangular') === 'equirectangular';
+    // An ambiguous frame only justifies the picker while we're actually guessing
+    // (`stereo:'auto'`) — same gate as the dev hint, so the menu never appears
+    // without its explanation. An explicit layout is a decision already made; the
+    // picker then shows only because a stereo layout is live (to switch/compare).
     const relevant =
-      equirect && (this.stereoAmbiguity !== 'mono' || this.effectiveStereo() !== 'mono');
+      equirect &&
+      ((this.config.stereo === 'auto' && this.stereoAmbiguity !== 'mono') ||
+        this.effectiveStereo() !== 'mono');
     this.toolbar.setStereoMenuVisible(relevant);
   }
 
@@ -1020,6 +1026,12 @@ export class CI360Video extends EventEmitter implements CI360VideoInstance {
       (config.lensFovDeg !== undefined && config.lensFovDeg !== prevLensFov)
     ) {
       this.rebuildProjectionMesh();
+      // Stereo cropping (and thus the format picker) only applies to the
+      // equirectangular path, so a projection switch can flip the menu's
+      // relevance — re-reconcile it.
+      if (config.projection !== undefined && config.projection !== prevProjection) {
+        this.updateStereoMenuVisibility();
+      }
     }
 
     // Playback flags that map straight onto the <video> element.

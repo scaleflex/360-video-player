@@ -418,17 +418,17 @@ export function Panorama() {
     player:  '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M10 9l5 3-5 3V9z" fill="currentColor"/></svg>',
   };
   const sfxScaleflex = [
-    { name: 'asset-picker',      icon: IC.grid,   href: 'https://scaleflex.github.io/asset-picker/' },
-    { name: 'uploader',          icon: IC.upload, href: 'https://scaleflex.github.io/uploader/' },
-    { name: 'experience-picker', icon: IC.layers, href: 'https://spotlight.scaleflex.com/docs/experience-picker' },
+    { name: 'Asset Picker',      icon: IC.grid,   href: 'https://scaleflex.github.io/asset-picker/' },
+    { name: 'Uploader',          icon: IC.upload, href: 'https://scaleflex.github.io/uploader/' },
+    { name: 'Experience Picker', icon: IC.layers, href: 'https://spotlight.scaleflex.com/docs/experience-picker' },
   ];
   const sfxCloudimage = [
     { name: '3D Viewer',          icon: IC.cube,     href: 'https://scaleflex.github.io/cloudimage-3d-view/' },
-    { name: '360 Image View',     icon: IC.rotate,   href: 'https://scaleflex.github.io/cloudimage-360-view/' },
+    { name: '360° Image View',     icon: IC.rotate,   href: 'https://scaleflex.github.io/cloudimage-360-view/' },
     { name: '360° Video',         icon: IC.player,   href: 'https://scaleflex.github.io/cloudimage-360-video/' },
     { name: 'Image Hotspots',     icon: IC.hotspot,  href: 'https://scaleflex.github.io/cloudimage-hotspot/' },
     { name: 'Video Hotspots',     icon: IC.video,    href: 'https://scaleflex.github.io/cloudimage-video-hotspot/' },
-    { name: 'Image Before After', icon: IC.split,    href: 'https://scaleflex.github.io/cloudimage-before-after/' },
+    { name: 'Image Before/After', icon: IC.split,    href: 'https://scaleflex.github.io/cloudimage-before-after/' },
     { name: 'Image Carousel',     icon: IC.carousel, href: 'https://scaleflex.github.io/cloudimage-carousel/' },
     { name: 'Image Crop',         icon: IC.crop,     href: 'https://scaleflex.github.io/cloudimage-image-crop/' },
     { name: 'Spotlight',          icon: IC.zoom,     href: 'https://scaleflex.github.io/cloudimage-spotlight/' },

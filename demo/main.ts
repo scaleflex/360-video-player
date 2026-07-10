@@ -17,10 +17,15 @@ import '../src/define'; // registers <ci-360-video>
 import type { CI360VideoElement } from '../src/web-component/ci-360-video';
 import type { CI360VideoConfig, StereoLayout } from '../src/core/types';
 import { fromFilerobotFile, type FilerobotFileLike } from '../src/filerobot/index';
-// Diagnostics for the Format tester: the same metadata + heuristic the player
-// uses internally, so the demo can show "does this source carry the data we need".
-import { detectStereoLayout, parseStereoModeFromMoov } from '../src/player/spherical-metadata';
-import { classifyStereoAmbiguity } from '../src/player/stereo-heuristic';
+// Diagnostics for the Format tester — the public `@cloudimage/360-video/metadata`
+// subpath (imported here from its source entry, `../src/metadata`). This is the
+// exact standalone API an authoring UI would use to inspect a source up front, so
+// the tester dogfoods it rather than reaching into the player's internals.
+import {
+  detectSphericalMetadata,
+  parseSphericalMetadataFromMoov,
+  classifyStereoAmbiguity,
+} from '../src/metadata';
 
 declare global {
   interface Window { Prism?: { highlightAll(): void; highlightElement(el: Element): void } }
@@ -674,7 +679,7 @@ function renderDocConfiguration(): string {
       [opt('sources'), '<code>VideoSource[]</code>', '—', 'Pre-encoded variants (one file per resolution); the quality menu switches between them.'],
       [opt('projection'), `<code>'equirectangular' | 'fisheye' | 'dual-fisheye'</code>`, `<code>'equirectangular'</code>`, 'Source projection format.'],
       [opt('stereo'), `<code>'auto' | 'mono' | 'top-bottom' | 'side-by-side'</code>`, `<code>'auto'</code>`, '<code>auto</code> reads the MP4 Spherical metadata (<code>st3d</code> / <code>GSpherical</code>); else force a layout. The left eye is rendered in mono (non-VR) view.'],
-      [opt('stereoMenu'), `<code>boolean | 'auto'</code>`, `<code>'auto'</code>`, 'Toolbar format picker (Mono / Top-Bottom / Side-by-Side) so a viewer can fix a stereo source that has no metadata. <code>auto</code> shows it only when relevant (ambiguous frame, or stereo already active).'],
+      [opt('stereoMenu'), `<code>boolean | 'auto'</code>`, `<code>'auto'</code>`, 'Toolbar format picker (Mono / Top-Bottom / Side-by-Side) so a viewer can switch layout at runtime — e.g. to fix a stereo source with no metadata. <code>auto</code> shows it only when relevant (an ambiguous frame with no metadata, or a stereo layout already active); <code>true</code> always; <code>false</code> never.'],
       [opt('lensFovDeg'), '<code>number</code>', '<code>180</code>', 'Per-lens field of view for fisheye projections.'],
       [opt('playerType'), `<code>'auto' | 'html5' | 'hls' | 'dash'</code>`, `<code>'auto'</code>`, 'Adapter selector; <code>auto</code> detects from the URL extension.'],
       [opt('crossOrigin'), '<code>string</code>', `<code>'anonymous'</code>`, '<code>&lt;video crossorigin&gt;</code> — keeps the WebGL texture untainted.'],
@@ -1016,7 +1021,9 @@ function hydrateExampleStereo(root: HTMLElement): void {
   const host = root.querySelector<HTMLElement>('#ex-stereo');
   if (!host) return;
   const make = (stereo: 'auto' | 'mono' | 'top-bottom' | 'side-by-side') =>
-    mountPlayer(host, { src: STEREO_TB, stereo, stereoMenu: true, autoplay: true, muted: true, loop: true });
+    // stereoMenu: 'auto' matches the code block below — congo.mp4 resolves to a
+    // stereo layout, so the picker surfaces on its own once metadata is read.
+    mountPlayer(host, { src: STEREO_TB, stereo, stereoMenu: 'auto', autoplay: true, muted: true, loop: true });
   make('auto');
   root.querySelectorAll<HTMLButtonElement>('.ex-stereo-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1030,17 +1037,22 @@ function hydrateExampleStereo(root: HTMLElement): void {
   });
 }
 
-// -- Format tester (temporary playground) -------------------------------------
-// A full player wired to the new stereo fallback: load any clip from a URL or
+// -- Format tester ------------------------------------------------------------
+// A full player wired to the stereo fallback, doubling as a live demo of the
+// standalone `@cloudimage/360-video/metadata` API: load any clip from a URL or
 // from disk, force a layout with the quick buttons, or use the toolbar's format
-// picker (the layers icon). NOTE: this page is a temporary testing aid — local
-// files are served as `blob:` URLs, which can't be range-probed, so `'auto'`
-// always resolves to mono for them; that's exactly the "no metadata" case the
-// format picker is meant to fix.
+// picker (the layers icon). The panel reports what `detectSphericalMetadata()`
+// reads from the source.
+//
+// Local files are inspected by parsing their bytes directly (what an authoring
+// UI would do on a freshly picked file). Note they're previewed through a
+// throwaway `blob:` URL, which the player can't range-probe — so `stereo:'auto'`
+// only truly kicks in for a hosted URL; the panel flags this so its verdict and
+// the live preview never quietly disagree.
 function renderExampleTester(): string {
   return examplePage(
     'Format tester',
-    'Drop in <em>any</em> 360° clip — by URL or from your computer — and exercise the full player with the new stereo fallback. Use the quick buttons to force a layout, or the toolbar <strong>format picker</strong> (layers icon) to switch it live. The panel below reports exactly <strong>what data the player can read from your source</strong> — Spherical metadata, frame size and shape — so you can tell at a glance whether <code>auto</code> will work or you need to set the layout yourself.',
+    'Drop in <em>any</em> 360° clip — by URL or from your computer — and exercise the full player with the stereo fallback. Use the quick buttons to force a layout, or the toolbar <strong>format picker</strong> (layers icon) to switch it live. The panel below runs the standalone <code>@cloudimage/360-video/metadata</code> API (<code>detectSphericalMetadata</code>) against your source and reports exactly <strong>what it can read</strong> — the 360°/spherical flag, stereo metadata, frame size and shape — so you can tell at a glance whether <code>auto</code> will work or you need to set the layout yourself.',
     `
     <div class="demo-example-controls" style="flex-wrap:wrap;gap:10px;align-items:center">
       <input id="tester-url" type="text" placeholder="https://…/video.mp4 (or .m3u8 / .mpd)" value="${STEREO_TB}"
@@ -1053,8 +1065,9 @@ function renderExampleTester(): string {
     </div>
     ${liveHost('ex-tester')}
     <div id="tester-report" style="margin-top:14px;padding:14px 16px;border-radius:12px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.12);font-size:13px;line-height:1.85">
-      <strong style="display:block;margin-bottom:6px">Source data the player sees</strong>
-      <div>Spherical metadata: <code id="rep-meta">—</code></div>
+      <strong style="display:block;margin-bottom:6px">What <code>detectSphericalMetadata()</code> reads</strong>
+      <div>360° (spherical) flag: <code id="rep-spherical">—</code></div>
+      <div>Stereo metadata: <code id="rep-meta">—</code></div>
       <div>Frame size: <code id="rep-size">—</code></div>
       <div>Frame shape: <code id="rep-shape">—</code></div>
       <div><code>stereo: 'auto'</code> resolves to: <code id="rep-auto">—</code></div>
@@ -1066,6 +1079,13 @@ function renderExampleTester(): string {
   stereo: 'auto',     // detects metadata; falls back to mono without it
   stereoMenu: true,   // always offer the manual format picker
 });`, 'typescript')}
+    <p class="demo-doc-lead" style="font-size:14px">The panel above uses the same detection standalone — no player, no Three.js — so an authoring UI can inspect a source up front:</p>
+    ${codeBlock(`import { detectSphericalMetadata } from '@cloudimage/360-video/metadata';
+
+const meta = await detectSphericalMetadata(url);
+// meta === null            → not MP4 / no range support (keep a manual UI)
+// meta.spherical === true  → 360° source (e.g. auto-enable a 360 toggle)
+// meta.stereo              → 'top-bottom' | 'side-by-side' | 'mono' | null`, 'typescript')}
   `,
   );
 }
@@ -1077,6 +1097,7 @@ function hydrateExampleTester(root: HTMLElement): void {
   if (!urlInput || !fileInput) return;
 
   const rep = {
+    spherical: root.querySelector<HTMLElement>('#rep-spherical'),
     meta: root.querySelector<HTMLElement>('#rep-meta'),
     size: root.querySelector<HTMLElement>('#rep-size'),
     shape: root.querySelector<HTMLElement>('#rep-shape'),
@@ -1090,8 +1111,13 @@ function hydrateExampleTester(root: HTMLElement): void {
   let stereo: 'auto' | 'mono' | 'top-bottom' | 'side-by-side' = 'auto';
   // Diagnostics state, recomputed per load; advice waits on both async checks.
   type ShapeKind = 'mono' | 'tb-candidate' | 'sbs-candidate';
+  let spherical: boolean | null = null;
   let metaLayout: StereoLayout | null = null;
   let shape: ShapeKind | null = null;
+  // A local file is parsed from bytes directly; its live preview runs off a
+  // throwaway blob: URL the player can't range-probe. The advice text has to say
+  // so, or the panel's verdict and the preview above it quietly disagree.
+  let isLocal = false;
   let token = 0; // guards against a slow probe from a previous source landing late
 
   const SHAPE_LABEL: Record<ShapeKind, string> = {
@@ -1102,8 +1128,18 @@ function hydrateExampleTester(root: HTMLElement): void {
 
   const renderAdvice = (): void => {
     if (!rep.advice) return;
-    if (rep.auto) rep.auto.textContent = metaLayout ?? 'mono (no metadata found)';
-    if (metaLayout) {
+    // For a hosted URL `detectSphericalMetadata` IS the player's probe, so the
+    // "auto resolves to" line is the literal truth. For a local file we've read
+    // more than the player can (bytes vs. a non-probeable blob:), so we report
+    // what the file holds but flag that `auto` needs a real hosted URL.
+    if (rep.auto) {
+      rep.auto.textContent = isLocal
+        ? `${metaLayout ?? 'mono'} — but only once hosted (a blob: URL can't be range-probed)`
+        : (metaLayout ?? 'mono (no metadata found)');
+    }
+    if (metaLayout && isLocal) {
+      rep.advice.innerHTML = `✅ <strong>File carries <code>${metaLayout}</code> metadata.</strong> Host it on a CORS-enabled server with range support and <code>stereo: 'auto'</code> detects it automatically. The preview above runs off a temporary <code>blob:</code> URL where <code>auto</code> can't probe — pick <code>${metaLayout}</code> from the format menu to preview it correctly here.`;
+    } else if (metaLayout) {
       rep.advice.innerHTML = `✅ <strong>Metadata present.</strong> <code>stereo: 'auto'</code> detects <code>${metaLayout}</code> on its own — nothing to configure.`;
     } else if (shape === 'tb-candidate' || shape === 'sbs-candidate') {
       const guess = shape === 'tb-candidate' ? 'top-bottom' : 'side-by-side';
@@ -1117,27 +1153,40 @@ function hydrateExampleTester(root: HTMLElement): void {
 
   const inspect = async (): Promise<void> => {
     const mine = ++token;
+    isLocal = !!(lastFile && src === objUrl);
+    spherical = null;
     metaLayout = null;
     shape = null;
+    if (rep.spherical) rep.spherical.textContent = '—';
     if (rep.meta) rep.meta.textContent = 'checking…';
     if (rep.size) rep.size.textContent = '—';
     if (rep.shape) rep.shape.textContent = '—';
     if (rep.auto) rep.auto.textContent = '—';
     if (rep.advice) rep.advice.textContent = '';
 
-    // Metadata: a local file can be parsed directly from its bytes; a URL is
-    // range-probed over the network (exactly what the player does for 'auto').
+    // The public `/metadata` API an authoring UI would call: a local file is
+    // parsed straight from its bytes; a hosted URL is range-probed over the
+    // network (exactly what the player does for `stereo: 'auto'`).
     try {
-      if (lastFile && src === objUrl) {
-        const buf = new Uint8Array(await lastFile.arrayBuffer());
-        metaLayout = parseStereoModeFromMoov(buf);
+      if (isLocal) {
+        const buf = new Uint8Array(await lastFile!.arrayBuffer());
+        const meta = parseSphericalMetadataFromMoov(buf);
+        spherical = meta.spherical;
+        metaLayout = meta.stereo;
       } else {
-        metaLayout = await detectStereoLayout(src);
+        const meta = await detectSphericalMetadata(src);
+        spherical = meta ? meta.spherical : null;
+        metaLayout = meta ? meta.stereo : null;
       }
     } catch {
+      spherical = null;
       metaLayout = null;
     }
     if (mine !== token) return; // a newer load superseded this probe
+    if (rep.spherical) {
+      rep.spherical.textContent =
+        spherical === null ? 'unknown (not MP4 / no range support)' : spherical ? 'yes' : 'no';
+    }
     if (rep.meta) rep.meta.textContent = metaLayout ?? 'none found';
     renderAdvice();
   };

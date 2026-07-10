@@ -64,7 +64,7 @@ Part of the Cloudimage plugin family — sibling to [`@cloudimage/360-view`](../
 - **Multiple source adapters** (HTML5, HLS, DASH) and **multiple projections** (equirectangular, fisheye, dual-fisheye) — all pluggable, all lazy-loaded.
 - **Visual identity 1:1 with [`@cloudimage/video-hotspot`](../Video%20hotspot%20plugin)** — same CSS variables, same toolbar metrics, same Lucide icons. Themable via CSS custom properties.
 - **Full-featured toolbar**: play/pause, mute + volume, scrub progress with time tooltip, **speed selector** (0.5×–2×), **quality selector** (HLS/DASH levels), loop toggle, fullscreen, idle auto-hide, GPU-warning chip.
-- **Auto stereo detection** — `stereo: 'auto'` reads the MP4's Spherical Video metadata (`st3d` / `GSpherical`) so correctly tagged top-bottom / side-by-side files render the correct eye automatically. Files without metadata get a developer hint plus an optional viewer-facing **format picker** (`stereoMenu`).
+- **Auto stereo detection** — `stereo: 'auto'` reads the MP4's Spherical Video metadata (`st3d` / `GSpherical`) so correctly tagged top-bottom / side-by-side files render the correct eye automatically. Files without metadata get a developer hint plus an optional viewer-facing **format picker** (`stereoMenu`). The same detector ships standalone as [`/metadata`](#standalone-metadata-detection-metadata) for authoring UIs.
 - **Extension seams** for **hotspot/overlay layers** — engine slots wired up — so adding them later is targeted, not a rewrite.
 - **SSR-safe** React wrapper (dynamic import in `useEffect`) — works in Next.js / Remix without "ReferenceError: window is not defined".
 
@@ -267,7 +267,7 @@ All fields are optional except `src`.
 | `sources`           | `VideoSource[]`       | —                  | Pre-encoded variants at different qualities. When set, the quality dropdown lists these and picking one swaps the `<video src>` (preserving time + play state); plain `src` is then ignored. See "Toolbar features". |
 | `projection`        | `'equirectangular' \| 'fisheye' \| 'dual-fisheye'` | `'equirectangular'`| See "Supported projections" above. |
 | `stereo`            | `'auto' \| 'mono' \| 'top-bottom' \| 'side-by-side'` | `'auto'` | Stereo source layout. `auto` reads the MP4 Spherical metadata (`st3d` / `GSpherical`); else force a layout. Left eye rendered on sphere. |
-| `stereoMenu`        | `boolean \| 'auto'` | `'auto'` | Toolbar format picker (Mono / Top-Bottom / Side-by-Side) for sources with no metadata. `auto` shows it only when relevant; `true` always; `false` never. |
+| `stereoMenu`        | `boolean \| 'auto'` | `'auto'` | Toolbar format picker (Mono / Top-Bottom / Side-by-Side) letting a viewer switch layout at runtime — e.g. to fix a stereo source with no metadata. `auto` shows it only when relevant (an ambiguous frame with no metadata, or a stereo layout already active); `true` always; `false` never. |
 | `lensFovDeg`        | `number` (deg)        | `180`              | Per-lens FOV for fisheye projections. Adjust if a specific camera under-/over-shoots. |
 | `autoplay`          | `boolean`             | `false`            | Implies `muted: true` (browser policy). |
 | `loop`              | `boolean`             | `false`            | |
@@ -434,6 +434,28 @@ Lower-level helpers for branching yourself:
 > **HLS (adaptive) vs Compression (separate files).** Both give a working quality menu. HLS switches renditions inside one stream (better for long videos / variable networks); Compression serves a distinct URL per quality (simpler, no MSE, switch preserves `currentTime` + play state). Enable Compression resolutions in **Project Settings → Storage → Video → Compression**, then run **Recompress** on the asset.
 
 The subpath is tree-shaken — consumers who don't import `/filerobot` ship zero bytes of integration code.
+
+### Standalone metadata detection (`/metadata`)
+
+The player reads a source's Spherical Video metadata to drive `stereo: 'auto'` — a small HTTP range read over the MP4's `moov` box (no media download). That detector is also exported on its own, so an **authoring / upload UI** can inspect a source *before* the player mounts and configure it up front. It's a dependency-free ES module (no Three.js), tree-shaken away unless you import `/metadata`, and shares the player's code — so what you detect and what the viewer renders can never disagree.
+
+```ts
+import { detectSphericalMetadata } from '@cloudimage/360-video/metadata';
+
+const meta = await detectSphericalMetadata(url);
+// meta === null            → not MP4 / no range support / CORS — keep a manual UI
+// meta.spherical === true  → 360° source (e.g. auto-enable a "360" toggle)
+// meta.stereo              → 'top-bottom' | 'side-by-side' | 'mono' | null
+```
+
+`detectSphericalMetadata(url, options?)` → `Promise<{ spherical: boolean; stereo: StereoLayout | null } | null>`. Never throws — every failure (non-MP4, no range support, network/CORS, malformed) resolves to `null`.
+
+- `signal?: AbortSignal` — cancel an in-flight probe.
+- `maxMoovBytes?: number` (default 32 MB) — cap how much of `moov` is pulled into memory. The stereo/spherical boxes sit near the front of `moov`, so a cheap probe on arbitrary sources can pass a much smaller cap, e.g. `512 * 1024`. Metadata beyond the cap is reported as absent (there's no way to tell "no metadata" from "past the cap" — set the cap accordingly).
+
+Also exported: `detectStereoLayout(url, signal?)` (stereo layout only — what the player's `'auto'` path calls), the pure `moov`-buffer parsers `parseSphericalMetadataFromMoov` / `parseStereoModeFromMoov`, the aspect-ratio hint `classifyStereoAmbiguity(width, height)` → `'mono' | 'tb-candidate' | 'sbs-candidate'` (a *suggestion* only — never a render decision, since a mono-180° frame is also `1:1`), and the types `SphericalMetadata` / `DetectOptions` / `StereoAmbiguity` / `StereoLayout`.
+
+> Try it live on the **Format tester** demo page — it runs `detectSphericalMetadata()` against any URL or local file and reports exactly what it reads.
 
 ## Extension points (engine wired, UIs deferred)
 

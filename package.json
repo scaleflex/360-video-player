@@ -1,6 +1,6 @@
 {
   "name": "@cloudimage/360-video",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "Interactive 360° (equirectangular) video player on Three.js with custom controls, gyroscope, fullscreen, accessibility and React wrapper",
   "license": "MIT",
   "author": "Scaleflex",

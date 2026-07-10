@@ -83,7 +83,7 @@ extra dependency needed for MP4/WebM):
 
 ```html
 <!-- Cloudimage CDN (version-pinned): -->
-<script src="https://cdn.cloudimage.io/360-video/1.4.3/360-video.min.js"></script>
+<script src="https://cdn.cloudimage.io/360-video/1.5.0/360-video.min.js"></script>
 <!-- or unpkg (always latest): -->
 <script src="https://unpkg.com/@cloudimage/360-video"></script>
 ```
@@ -125,7 +125,7 @@ the element, then use it like any HTML tag — config maps to plain kebab attrib
 Over the **CDN** the single `<script>` registers the element for you (nothing else to import):
 
 ```html
-<script src="https://cdn.cloudimage.io/360-video/1.4.3/360-video.min.js"></script>
+<script src="https://cdn.cloudimage.io/360-video/1.5.0/360-video.min.js"></script>
 <ci-360-video src="…mp4" autoplay muted loop style="display:block;width:100%;aspect-ratio:16/9"></ci-360-video>
 ```
 
